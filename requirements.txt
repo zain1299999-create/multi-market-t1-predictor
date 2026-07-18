@@ -9,7 +9,26 @@ scikit-learn>=1.3.0
 requests>=2.31.0
 pyarrow>=12.0.0
 pyyaml>=6.0
-# Optional — sentiment enhancement
-# alpha-vantage
+# ── News & Social Media Sentiment Module (new) ──
+# Core dependencies
+feedparser>=6.0.10      # RSS parsing
+beautifulsoup4>=4.12.0  # HTML scraping (fallback)
+
+# Sentiment analyzers (optional, graceful fallback)
+vaderSentiment>=3.3.2   # English sentiment
+snownlp>=0.12.3         # Chinese sentiment
+textblob>=0.17.1        # English sentiment (alternative)
+
+# Social media scraping (optional, graceful fallback)
+# snscrape>=0.3.6       # Twitter/Weibo/Reddit scraping (GH Actions: check compat)
+
+# YouTube scraping (optional)
+# youtube-search>=2.1.1
+# youtube-comment-downloader>=0.2.0
+
+# Financial BERT (optional, requires torch)
+# transformers>=4.30.0
+# torch>=2.0.0
+
 # Optuna tuning (install only when used)
 # optuna

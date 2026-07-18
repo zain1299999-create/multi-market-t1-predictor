@@ -35,8 +35,10 @@ from config import (ACTIVE_MARKETS, TOP_K, LOG_LEVEL, LOG_FORMAT,
                     WFA_ENABLED, OPTUNA_ENABLED, ENSEMBLE_ENABLED,
                     BACKTEST_TOP_K, REPORTS)
 from data_fetcher import (fetch_cn_index_components,
-                          fetch_market_data, is_trading_day)
+                          fetch_market_data, fetch_news_sentiment,
+                          is_trading_day)
 from features import build_all_features
+from config import NEWS_SENTIMENT_ENABLED, NEWS_SENTIMENT_LIMIT
 from signal_processor import preprocess, get_feature_cols
 from model import (prepare_training_data, train_model, predict,
                    load_model, should_retrain, get_model_age_days,
@@ -106,6 +108,41 @@ def main():
         sentiment = data.get("sentiment", pd.DataFrame())
         macro = data.get("macro", pd.DataFrame())
 
+        # ── Step 2b: News & Social Media Sentiment (new module) ──
+        news_sentiment = pd.DataFrame()
+        if NEWS_SENTIMENT_ENABLED:
+            logger.info("  Fetching multi-source news & social media sentiment...")
+            try:
+                news_sentiment = fetch_news_sentiment(
+                    market=market,
+                    tickers=tickers if len(tickers) <= 50 else None,
+                    use_cache=True,
+                )
+                if not news_sentiment.empty:
+                    logger.info("  News sentiment: %d rows, %d tickers",
+                                len(news_sentiment),
+                                news_sentiment["symbol"].nunique() if "symbol" in news_sentiment.columns else 0)
+                    # Merge with existing API sentiment (alpha_vantage/marketaux)
+                    # Prefer news_sentiment for methods that also have API sentiment
+                    if not sentiment.empty:
+                        sentiment = pd.concat(
+                            [sentiment, news_sentiment], ignore_index=True
+                        )
+                        sentiment = sentiment.groupby(["date", "symbol"]).agg(
+                            sentiment_score=("sentiment_score", "mean"),
+                            news_count=("news_count", "sum"),
+                        ).reset_index()
+                        logger.info("  Merged sentiment: %d rows", len(sentiment))
+                    else:
+                        # Rename columns to match the format features.py expects
+                        sentiment = news_sentiment.rename(
+                            columns={"sentiment_score": "sentiment_score"}
+                        )
+                else:
+                    logger.info("  No news sentiment data collected")
+            except Exception as e:
+                logger.warning("  News sentiment fetch failed: %s", e)
+
         if ohlcv.empty:
             logger.warning("  No OHLCV data for %s", market)
             continue
@@ -113,7 +150,7 @@ def main():
                     len(ohlcv), ohlcv["symbol"].nunique() if "symbol" in ohlcv.columns else 0)
 
         # ── Step 3: Features ──
-        logger.info("  Building features (Alpha158 + sentiment + macro)...")
+        logger.info("  Building features (Alpha158 + sentiment + macro + news)...")
         features = build_all_features(
             ohlcv, market=market,
             sentiment_df=sentiment, macro_df=macro

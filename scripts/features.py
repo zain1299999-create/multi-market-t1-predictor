@@ -248,28 +248,78 @@ def compute_features_for_one_stock(group: pd.DataFrame) -> pd.DataFrame:
 
 def add_sentiment_features(df: pd.DataFrame,
                            sentiment_df: pd.DataFrame) -> pd.DataFrame:
-    """Merge sentiment features into main feature DataFrame."""
-    if sentiment_df.empty:
-        df["sentiment_score"]   = 0.0
-        df["sentiment_ma_5"]    = 0.0
-        df["sentiment_change"]  = 0.0
-        df["sentiment_std_5"]   = 0.0
-        df["news_count"]        = 0
-        return df
+    """Merge sentiment features into main feature DataFrame.
 
-    df = df.merge(
-        sentiment_df[["date", "symbol", "sentiment_score", "news_count"]],
-        on=["date", "symbol"], how="left"
-    )
-    df["sentiment_score"] = df["sentiment_score"].fillna(0.0)
-    df["news_count"]      = df["news_count"].fillna(0).astype(int)
+    Layer 3 sentiment features include:
+      - sentiment_score:  current weighted sentiment
+      - sentiment_ma_5:   5-day rolling average
+      - sentiment_change: day-over-day sentiment change
+      - sentiment_std_5:  5-day rolling std (disagreement measure)
+      - sentiment_trend:  trend direction over 3 days
+      - news_count:       article count (volume proxy)
+      - market_sentiment: aggregate market-level sentiment (from all sources)
+    """
+    if sentiment_df is not None and not sentiment_df.empty:
+        # Merge news sentiment data
+        merge_cols = ["date", "symbol", "sentiment_score", "news_count"]
+        available = [c for c in merge_cols if c in sentiment_df.columns]
 
+        # Also try "sentiment_std" if available
+        if "sentiment_std" in sentiment_df.columns:
+            available.append("sentiment_std")
+
+        df = df.merge(
+            sentiment_df[available],
+            on=["date", "symbol"], how="left"
+        )
+        df["sentiment_score"] = df.get("sentiment_score", pd.Series(0.0)).fillna(0.0)
+        df["news_count"]      = df.get("news_count", pd.Series(0.0)).fillna(0).astype(int)
+        if "sentiment_std" in df.columns:
+            df["sentiment_std"] = df["sentiment_std"].fillna(0.0)
+    else:
+        # No sentiment data — fill with zeros
+        df["sentiment_score"] = 0.0
+        df["news_count"]      = 0
+
+    df["news_count"] = df["news_count"].clip(upper=1000)
     df = df.sort_values(["symbol", "date"]).reset_index(drop=True)
+
+    # Rolling sentiment features
     group_sent = df.groupby("symbol")["sentiment_score"]
-    df["sentiment_ma_5"]   = group_sent.transform(lambda s: s.rolling(5, min_periods=1).mean()).fillna(0.0)
-    df["sentiment_std_5"]  = group_sent.transform(lambda s: s.rolling(5, min_periods=1).std()).fillna(0.0)
-    df["sentiment_change"] = group_sent.transform(lambda s: s.diff().fillna(0.0))
+    df["sentiment_ma_3"]   = group_sent.transform(
+        lambda s: s.rolling(3, min_periods=1).mean()
+    ).fillna(0.0).values
+    df["sentiment_ma_5"]   = group_sent.transform(
+        lambda s: s.rolling(5, min_periods=1).mean()
+    ).fillna(0.0).values
+    df["sentiment_ma_10"]  = group_sent.transform(
+        lambda s: s.rolling(10, min_periods=1).mean()
+    ).fillna(0.0).values
+    df["sentiment_std_5"]  = group_sent.transform(
+        lambda s: s.rolling(5, min_periods=1).std()
+    ).fillna(0.0).values
+    df["sentiment_change"] = group_sent.transform(
+        lambda s: s.diff().fillna(0.0)
+    ).values
+
+    # Sentiment trend: slope over last 3 days (positive = improving)
+    def _sentiment_trend(series):
+        if len(series) < 3:
+            return 0.0
+        return (series.iloc[-1] - series.iloc[-3]) / 2.0
+
+    df["sentiment_trend"] = df.groupby("symbol")["sentiment_score"] \
+        .transform(lambda s: s.rolling(3, min_periods=1)
+                   .apply(_sentiment_trend, raw=False)).fillna(0.0).values
+
+    # Interaction: sentiment * volume ratio (sentiment-confirmed volume)
+    if "volume_ratio_5" in df.columns:
+        df["sentiment_volume_interaction"] = df["sentiment_score"] * df["volume_ratio_5"]
+    else:
+        df["sentiment_volume_interaction"] = df["sentiment_score"]
+
     return df
+
 
 
 def add_cross_market_features(df: pd.DataFrame,

@@ -18,7 +18,9 @@ import pandas as pd
 import numpy as np
 
 from config import (DATA_CACHE, DATA_START_DATE, MACRO_SYMBOLS,
-                    ALPHA_VANTAGE_KEY, MARKETAUX_KEY, MARKET_RULES)
+                    ALPHA_VANTAGE_KEY, MARKETAUX_KEY, MARKET_RULES,
+                    NEWS_RSS_ENABLED, NEWS_API_ENABLED, NEWS_SOCIAL_ENABLED,
+                    NEWS_CACHE_ENABLED, NEWS_CACHE_MAX_AGE_H)
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +287,49 @@ def fetch_marketaux_sentiment(symbols: List[str]) -> pd.DataFrame:
         news_count=("sentiment_score", "count"),
     ).reset_index()
     return agg
+
+
+def fetch_news_sentiment(market: str = "US",
+                        tickers: Optional[List[str]] = None,
+                        use_cache: bool = True) -> pd.DataFrame:
+    """Fetch multi-source news & social media sentiment via news_sentiment module.
+
+    This wraps the full news_sentiment pipeline:
+      RSS + API + Social media → VADER/SnowNLP analysis → aggregation → DataFrame
+
+    Graceful degradation: if news_sentiment module or any dependency is missing,
+    returns empty DataFrame without crashing.
+
+    Returns:
+        DataFrame with columns: date, symbol, sentiment_score, news_count
+    """
+    try:
+        from news_sentiment import collect_and_analyze
+        result = collect_and_analyze(
+            market=market,
+            tickers=tickers,
+            run_rss=NEWS_RSS_ENABLED,
+            run_api=NEWS_API_ENABLED,
+            run_social=NEWS_SOCIAL_ENABLED,
+            use_cache=use_cache and NEWS_CACHE_ENABLED,
+        )
+        df_data = result.get("sentiment_df")
+        if df_data is None or len(df_data) == 0:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(df_data)
+        df["date"] = pd.to_datetime(df["date"])
+        return df.sort_values(["date", "symbol"]).reset_index(drop=True)
+
+    except ImportError as e:
+        logger.debug("news_sentiment module not available: %s. "
+                     "Install with: pip install -r requirements.txt && "
+                     "pip install vaderSentiment snownlp", e)
+        return pd.DataFrame()
+    except Exception as e:
+        logger.warning("News sentiment collection failed for market=%s: %s",
+                       market, e)
+        return pd.DataFrame()
 
 
 def fetch_sentiment(tickers: List[str]) -> pd.DataFrame:

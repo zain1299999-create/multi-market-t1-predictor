@@ -155,6 +155,37 @@ META_MODEL       = "ridge"  # ridge | linear | none
 # ── Backtest ────────────────────────────────────────────────────────────
 TOP_K_BACKTEST = [5, 10, 20, 30]  # multiple top-K to compare
 
+# ── News / Social Sentiment ──────────────────────────────────────────────
+# Enables the multi-source news & social media sentiment module (news_sentiment)
+NEWS_SENTIMENT_ENABLED = True
+
+# Which collection tiers to enable
+NEWS_RSS_ENABLED     = True   # RSS feeds (always free)
+NEWS_API_ENABLED     = True   # API-based (needs keys; skips if missing)
+NEWS_SOCIAL_ENABLED  = True   # Social media via snscrape (needs pip install)
+
+# Cache control
+NEWS_CACHE_ENABLED     = True
+NEWS_CACHE_MAX_AGE_H   = 6      # hours before re-fetch
+NEWS_SENTIMENT_LIMIT   = 200    # max articles per market
+
+# Source priority for sentiment merging (lower = higher priority)
+NEWS_SOURCE_WEIGHTS = {
+    "alpha_vantage": 1.5,   # Has ticker-level sentiment built-in
+    "marketaux":     1.3,
+    "newsapi":       1.0,
+    "reuters":       1.0,
+    "bloomberg":     1.0,
+    "cls":           1.0,   # 财联社
+    "eastmoney":     1.0,
+    "sina_finance":  1.0,
+    "xueqiu":        1.0,
+    "twitter":       0.6,
+    "weibo":         0.5,
+    "reddit":        0.5,
+    "youtube":       0.4,
+}
+
 # ── Logging ────────────────────────────────────────────────────────────
 LOG_LEVEL = "INFO"
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
