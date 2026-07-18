@@ -23,7 +23,7 @@ from typing import List, Dict, Optional
 from .config_news import WATCH_KEYWORDS, SENTIMENT_MODELS, MAX_CACHE_AGE_HOURS
 from .news_collector import fetch_rss_feeds, fetch_api_news, _compute_quick_sentiment
 from .social_collector import fetch_social_sentiment, fetch_youtube_comments
-from .sentiment_engine import analyze_all_items, enrich_with_sentiment
+from .sentiment_engine import analyze_all_items, analyze_text
 from .cache_manager import NewsCache
 from .aggregator import aggregate_sentiment, compute_market_sentiment
 
