@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 
 import requests
 import feedparser
+import socket
 from bs4 import BeautifulSoup
 
 from .config_news import FINANCIAL_RSS_FEEDS, API_NEWS_SOURCES, WATCH_KEYWORDS, SCRAPE_DELAYS
@@ -50,7 +51,10 @@ def fetch_rss_feeds(market: str = "US", limit: int = 200) -> List[Dict]:
 
         for feed_url in source.feeds:
             try:
-                feed = feedparser.parse(feed_url)
+                # Use requests with timeout instead of feedparser's built-in HTTP
+                resp = requests.get(feed_url, timeout=15,
+                                    headers={'User-Agent': 'Mozilla/5.0'})
+                feed = feedparser.parse(resp.text)
                 if not feed.entries:
                     logger.debug("RSS %s: empty feed from %s", source.name, feed_url)
                     continue

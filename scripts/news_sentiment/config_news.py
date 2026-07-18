@@ -33,36 +33,23 @@ FINANCIAL_RSS_FEEDS: List[NewsSource] = [
     # ── 中文财经 ──
     NewsSource(
         name="cls", type="rss",
-        feeds=["https://www.cls.cn/telegraph"],
-        language="zh", max_items=50,
+        feeds=["https://www.cls.cn/api/sw?app=CailianpressWeb&os=web&sv=8.4.1"],
+        language="zh", max_items=30,
         name_cn="财联社",
     ),
     NewsSource(
-        name="eastmoney", type="rss",
-        feeds=["https://feed.eastmoney.com/rss/finance"],
-        language="zh", max_items=50,
-        name_cn="东方财富",
+        name="36kr", type="rss",
+        feeds=["https://36kr.com/feed"],
+        language="zh", max_items=30,
+        name_cn="36氪",
     ),
     NewsSource(
-        name="sina_finance", type="rss",
-        feeds=["https://feed.sina.com.cn/rss/finance.xml"],
-        language="zh", max_items=50,
-        name_cn="新浪财经",
-    ),
-    NewsSource(
-        name="xueqiu", type="rss",
-        feeds=["https://xueqiu.com/statuses/original/timeline.json"],
-        language="zh", max_items=50,
-        name_cn="雪球",
+        name="sspai", type="rss",
+        feeds=["https://sspai.com/feed"],
+        language="zh", max_items=20,
+        name_cn="少数派",
     ),
     # ── English financial ──
-    NewsSource(
-        name="reuters", type="rss",
-        feeds=["https://www.reutersagency.com/feed/",
-               "https://www.reutersagency.com/feed/?taxonomy=best-sectors&post_type=best"],
-        language="en", max_items=50,
-        name_cn="路透社",
-    ),
     NewsSource(
         name="bloomberg", type="rss",
         feeds=["https://feeds.bloomberg.com/markets/news.rss"],
@@ -76,29 +63,12 @@ FINANCIAL_RSS_FEEDS: List[NewsSource] = [
         name_cn="雅虎财经",
     ),
     NewsSource(
-        name="seeking_alpha", type="rss",
-        feeds=["https://seekingalpha.com/feed.xml"],
-        language="en", max_items=50,
-        name_cn="Seeking Alpha",
-    ),
-    NewsSource(
-        name="investing_com", type="rss",
-        feeds=["https://www.investing.com/rss/news.rss"],
-        language="en", max_items=50,
-        name_cn="Investing.com",
-    ),
-    NewsSource(
-        name="market_watch", type="rss",
-        feeds=["https://feeds.marketwatch.com/marketwatch/topstories/"],
-        language="en", max_items=50,
-        name_cn="MarketWatch",
-    ),
-    NewsSource(
         name="cnbc", type="rss",
         feeds=["https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"],
         language="en", max_items=50,
         name_cn="CNBC",
     ),
+
 ]
 
 # ═══════════════════════════════════════════════════════════════════════

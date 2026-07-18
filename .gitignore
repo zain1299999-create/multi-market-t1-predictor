@@ -6,8 +6,9 @@ __pycache__/
 dist/
 build/
 
-# Data & output
+# Data & output (generated at runtime)
 data/cache/
+data/news_timeline/
 outputs/*.csv
 logs/*.log
 reports/
