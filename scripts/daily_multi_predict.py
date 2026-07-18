@@ -181,7 +181,7 @@ def main():
             # Walk-Forward Analysis (when enabled)
             if WFA_ENABLED:
                 logger.info("  Walk-Forward Analysis mode...")
-                X, y, idx, fcols = prepare_training_data(features)
+                X, y, idx, group, fcols = prepare_training_data(features)
                 if X is not None:
                     wfa_preds, wfa_model = run_walk_forward(features, fcols)
                     if not wfa_preds.empty:
@@ -192,18 +192,18 @@ def main():
                         feature_cols = fcols
             else:
                 # Standard training
-                X, y, idx, fcols = prepare_training_data(features)
+                X, y, idx, group, fcols = prepare_training_data(features)
                 if X is not None:
-                    model, val_mae = train_model(X, y, fcols)
+                    model, val_mae = train_model(X, y, idx, group, fcols)
                     feature_cols = fcols
 
         if model is None and not WFA_ENABLED:
             # Fallback: try loading or train on this market
             model, feature_cols = load_model()
             if model is None:
-                X, y, idx, fcols = prepare_training_data(features)
+                X, y, idx, group, fcols = prepare_training_data(features)
                 if X is not None:
-                    model, _ = train_model(X, y, fcols)
+                    model, _ = train_model(X, y, idx, group, fcols)
                     feature_cols = fcols
             if model is None:
                 logger.warning("  No model for %s, skipping prediction", market)

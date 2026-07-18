@@ -384,6 +384,14 @@ def build_all_features(ohlcv_df: pd.DataFrame,
         df = add_cross_market_features(df, macro_df)
 
     df["market"] = market
+
+    # ── Market-relative label neutralization ──
+    # Subtract cross-sectional median T+1 return per-date
+    # This removes the market beta component → model learns alpha
+    if "label" in df.columns and "date" in df.columns:
+        daily_median = df.groupby("date")["label"].transform("median")
+        df["label"] = df["label"] - daily_median
+
     return df
 
 
