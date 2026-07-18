@@ -1,10 +1,10 @@
 """
 Multi-Market T+1 Predictor — Unified Configuration
-Merged from: a-share-t1-predictor + multi_market_t1_predictor
+Merged from: a-share-t1-predictor + multi_market_t1_predictor + Alpha158 upgrade
 """
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 # ── Paths ──────────────────────────────────────────────────────────────
 PROJECT_ROOT  = Path(__file__).resolve().parent.parent
@@ -18,11 +18,8 @@ for p in (DATA_CACHE, OUTPUTS, LOGS, REPORTS):
     p.mkdir(parents=True, exist_ok=True)
 
 # ── Market Universe ────────────────────────────────────────────────────
-# "hs300" | "zz500" | "all_a" | "multi"
-UNIVERSE = "multi"
-
-# When UNIVERSE = "multi", which markets to include
-ACTIVE_MARKETS = ["CN", "US"]  # CN, US, KR, JP
+UNIVERSE      = "multi"            # "hs300" | "zz500" | "all_a" | "multi"
+ACTIVE_MARKETS: List[str] = ["CN", "US"]  # CN, US, KR, JP
 
 # ── Prediction ─────────────────────────────────────────────────────────
 TOP_K            = 10
@@ -37,34 +34,42 @@ INDUSTRY_MAX_SHARE = 2
 # ── Data sources ───────────────────────────────────────────────────────
 DATA_START_DATE = "20200101"
 CACHE_VERSION   = "v1"
-
-# API Keys (from env or config)
 ALPHA_VANTAGE_KEY: Optional[str] = os.getenv("ALPHA_VANTAGE_KEY")
 MARKETAUX_KEY: Optional[str]     = os.getenv("MARKETAUX_KEY")
 
 # ── Cross-market symbols ───────────────────────────────────────────────
-MACRO_SYMBOLS = [
-    "^VIX",           # US VIX
-    "USD/KRW=X",      # USD/KRW
-    "USD/JPY=X",      # USD/JPY
-    "USDCNY=X",       # USD/CNY
-    "^GSPC",          # S&P 500
-    "^N225",          # Nikkei 225
-    "^KS11",          # KOSPI
-    "^HSI",           # Hang Seng
-    "DX-Y.NYB",       # US Dollar Index
+MACRO_SYMBOLS: List[str] = [
+    "^VIX", "^GSPC", "^N225", "^KS11", "^HSI", "DX-Y.NYB",
 ]
 
 # ── Sentiment config ───────────────────────────────────────────────────
 SENTIMENT_LOOKBACK_DAYS = 30
-SENTIMENT_MAX_NEWS     = 200
+SENTIMENT_MAX_NEWS      = 200
 
-# ── Feature engineering ────────────────────────────────────────────────
-MA_WINDOWS       = [3, 5, 10, 20, 30, 60]
-ROC_WINDOWS      = [5, 10, 20, 60]
-STD_WINDOWS      = [5, 10, 20]
-VOLUME_MA_WINDOWS = [5, 20]
-MOMENTUM_WINDOWS  = [1, 5, 10, 20]
+# ── Feature engineering: existing ──────────────────────────────────────
+MA_WINDOWS: List[int]       = [3, 5, 10, 20, 30, 60]
+ROC_WINDOWS: List[int]      = [5, 10, 20, 60]
+STD_WINDOWS: List[int]      = [5, 10, 20]
+VOLUME_MA_WINDOWS: List[int] = [5, 20]
+MOMENTUM_WINDOWS: List[int]  = [1, 5, 10, 20]
+
+# ── Alpha158 rolling windows (for all new factor groups) ───────────────
+ALPHA158_WINDOWS: List[int] = [5, 10, 20, 30, 60]
+
+# ── Signal processing ──────────────────────────────────────────────────
+ZSCORE_WINDOW       = 60      # rolling window for z-score normalization
+ZSCORE_MIN_PERIODS  = 30
+WINSORIZE_LOWER     = 0.01    # clip lower 1%
+WINSORIZE_UPPER     = 0.99    # clip upper 1%
+
+# ── Walk-Forward Analysis ──────────────────────────────────────────────
+WFA_TRAIN_DAYS = 504           # 2 years ≈ 504 trading days
+WFA_STEP_DAYS  = 20            # retrain every 20 days
+WFA_ENABLED    = False         # set True for WFA (takes longer)
+
+# ── Ensemble (Stacking) ────────────────────────────────────────────────
+ENSEMBLE_ENABLED = True        # True = LGB + XGB + Ridge meta
+META_MODEL       = "ridge"     # "ridge" | "linear" | "none"
 
 # ── Model ──────────────────────────────────────────────────────────────
 LGB_PARAMS = {
@@ -82,29 +87,44 @@ LGB_PARAMS = {
 }
 NUM_BOOST_ROUND = 500
 EARLY_STOPPING_ROUNDS = 30
-
-# Optuna tuning
 OPTUNA_N_TRIALS = 30
-OPTUNA_ENABLED  = False  # set True for tuning, False for fast training
+OPTUNA_ENABLED  = False
+
+# ── XGBoost params (used when ENSEMBLE_ENABLED) ────────────────────────
+XGB_PARAMS = {
+    "objective":        "reg:squarederror",
+    "eval_metric":      "mae",
+    "max_depth":        6,
+    "learning_rate":    0.05,
+    "subsample":        0.80,
+    "colsample_bytree": 0.85,
+    "verbosity":        0,
+    "nthread":          2,
+    "seed":             42,
+}
+
+# ── Backtest ───────────────────────────────────────────────────────────
+BACKTEST_TOP_K: List[int] = [5, 10, 20, 30]  # multiple K to compare
+BACKTEST_GROUPS         = 5                   # Q1-Q5 quintile groups
 
 # ── Market-specific rules ──────────────────────────────────────────────
 MARKET_RULES = {
     "CN": {
-        "price_limit": 0.10,     # 10% daily limit
+        "price_limit": 0.10,
         "t_plus": 1,
-        "min_volume_cny": 1e7,   # 10M CNY min turnover
+        "min_volume_cny": 1e7,
         "st_filter": True,
         "limit_up_filter": True,
     },
     "US": {
-        "price_limit": None,     # no daily limit
-        "t_plus": 1,             # T+1 settlement
-        "min_volume_usd": 1e6,   # 1M USD
+        "price_limit": None,
+        "t_plus": 1,
+        "min_volume_usd": 1e6,
         "st_filter": False,
     },
     "KR": {
-        "price_limit": 0.30,     # 30% KOSPI/KOSDAQ
-        "t_plus": 2,             # T+2 settlement
+        "price_limit": 0.30,
+        "t_plus": 2,
         "min_volume_krw": 5e8,
         "st_filter": False,
     },
@@ -115,6 +135,25 @@ MARKET_RULES = {
         "st_filter": False,
     },
 }
+
+# ── Logging ────────────────────────────────────────────────────────────
+# ── Alpha158 rolling windows ───────────────────────────────────────────
+ALPHA158_WINDOWS = [5, 10, 20, 30, 60]
+
+# ── Signal processing ───────────────────────────────────────────────────
+ZSCORE_WINDOW = 60
+WINSORIZE_LIMITS = (0.01, 0.99)
+
+# ── Walk-Forward Analysis ───────────────────────────────────────────────
+WFA_TRAIN_DAYS = 504       # 2 trading years ≈ 504 days
+WFA_STEP_DAYS  = 20         # retrain every 20 days
+
+# ── Ensemble / Stacking ─────────────────────────────────────────────────
+ENSEMBLE_ENABLED = True     # stacking / single
+META_MODEL       = "ridge"  # ridge | linear | none
+
+# ── Backtest ────────────────────────────────────────────────────────────
+TOP_K_BACKTEST = [5, 10, 20, 30]  # multiple top-K to compare
 
 # ── Logging ────────────────────────────────────────────────────────────
 LOG_LEVEL = "INFO"

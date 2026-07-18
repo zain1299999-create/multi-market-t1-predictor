@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-Multi-Market T+1 Next-Day Return Predictor — Main Entry
-==========================================================
+Multi-Market T+1 Next-Day Return Predictor — Main Entry (Upgraded)
+==================================================================
 Workflow:
   1. Detect trading days per market
   2. Fetch universe (index components or preset tickers)
   3. Fetch OHLCV + sentiment + macro for each active market
-  4. Feature engineering (24+ technical + sentiment + cross-market)
-  5. Train or load LightGBM model (time-series CV)
-  6. Predict on latest cross-section per market
-  7. Market-specific filters (ST/limit/IPO/liquidity/industry-diversify)
-  8. Diversified TopK per market → consolidated CSV output
+  4. Feature engineering (Alpha158 + sentiment + cross-market, ~130+ factors)
+  5. Signal preprocessing (winsorize → cross-sectional rank → fill)
+  6. Train or load LightGBM model (time-series CV, optional ensemble)
+  7. Compute factor IC & log top-10 features
+  8. Predict on latest cross-section per market
+  9. Market-specific filters (ST/limit/IPO/liquidity/industry-diversify)
+  10. Diversified TopK per market → backtest → consolidated CSV
 
 Usage:
     python scripts/daily_multi_predict.py
@@ -29,15 +31,18 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import (ACTIVE_MARKETS, TOP_K, LOG_LEVEL, LOG_FORMAT,
-                    TRAIN_YEARS, OUTPUTS, LOGS, DATA_CACHE, CONFIG_DIR,
-                    MARKET_RULES)
+                    TRAIN_YEARS, OUTPUTS, LOGS, DATA_CACHE,
+                    WFA_ENABLED, OPTUNA_ENABLED, ENSEMBLE_ENABLED,
+                    BACKTEST_TOP_K, REPORTS)
 from data_fetcher import (fetch_cn_index_components,
-                          fetch_market_data, is_trading_day,
-                          fetch_yf_ohlcv)
+                          fetch_market_data, is_trading_day)
 from features import build_all_features
+from signal_processor import preprocess, get_feature_cols
 from model import (prepare_training_data, train_model, predict,
-                   load_model, should_retrain, get_model_age_days)
+                   load_model, should_retrain, get_model_age_days,
+                   run_walk_forward, compute_factor_ic)
 from filter import filter_market, diversify_picks, compute_rank_metrics
+from backtest import run_backtest, backtest_top_k
 
 logger = logging.getLogger("multi_t1_predict")
 
@@ -50,9 +55,9 @@ logging.basicConfig(
               logging.StreamHandler()],
 )
 logger.info("=" * 60)
-logger.info("Multi-Market T+1 Predictor — Starting")
-logger.info("Active markets: %s | TopK: %d | Train years: %d",
-            ACTIVE_MARKETS, TOP_K, TRAIN_YEARS)
+logger.info("Multi-Market T+1 Predictor v2 — Alpha158 Upgrade")
+logger.info("Active: %s | TopK: %d | Train years: %d | Ensemble=%s | Optuna=%s",
+            ACTIVE_MARKETS, TOP_K, TRAIN_YEARS, ENSEMBLE_ENABLED, OPTUNA_ENABLED)
 
 # ── Market ticker presets ──────────────────────────────────────────────
 MARKET_TICKERS = {
@@ -69,7 +74,6 @@ def get_universe(market: str) -> list:
         comp = fetch_cn_index_components("hs300")
         if not comp.empty:
             return comp["code"].tolist()[:500]
-        # Fallback: common A-share
         return ["600519.SS", "000858.SZ", "300750.SZ", "601318.SS",
                 "000333.SZ", "600036.SS", "002415.SZ", "688981.SS"]
     return MARKET_TICKERS.get(market, [])
@@ -78,6 +82,7 @@ def get_universe(market: str) -> list:
 def main():
     today_str = datetime.now().strftime("%Y%m%d")
     all_picks = []
+    all_predictions = []  # for backtest
 
     for market in ACTIVE_MARKETS:
         logger.info("\n─── Market: %s ───", market)
@@ -108,7 +113,7 @@ def main():
                     len(ohlcv), ohlcv["symbol"].nunique() if "symbol" in ohlcv.columns else 0)
 
         # ── Step 3: Features ──
-        logger.info("  Building features...")
+        logger.info("  Building features (Alpha158 + sentiment + macro)...")
         features = build_all_features(
             ohlcv, market=market,
             sentiment_df=sentiment, macro_df=macro
@@ -116,38 +121,58 @@ def main():
         if features.empty:
             logger.warning("  No features for %s", market)
             continue
-        logger.info("  Features: %d rows x %d cols", len(features), len(features.columns))
+        logger.info("  Raw features: %d rows x %d cols", len(features), len(features.columns))
 
-        # ── Step 4: Model (cross-market = shared across all markets) ──
-        # For simplicity, train shared model across all data
+        # ── Step 4: Signal processing ──
+        logger.info("  Signal preprocessing...")
+        features = preprocess(features, do_winsorize=True, do_rank=True, do_zscore=False, do_fill=True)
+        if features.empty:
+            logger.warning("  Preprocessing empty for %s", market)
+            continue
+        logger.info("  Preprocessed: %d rows x %d cols", len(features), len(features.columns))
+
+        # ── Step 5: Model ──
         logger.info("  Model stage...")
         model = None
         feature_cols = None
-
         model_age = get_model_age_days()
-        needs_train = should_retrain(model_age)
+        needs_train = should_retrain(model_age) or WFA_ENABLED
 
         if needs_train:
             logger.info("  Training new model (age=%d days)...", model_age)
-            X, y, idx, fcols = prepare_training_data(features)
-            if X is not None:
-                model, val_mae = train_model(X, y, fcols)
-                feature_cols = fcols
-        else:
-            logger.info("  Loading existing model...")
-            model, feature_cols = load_model()
 
-        if model is None:
-            # Train on this market's data as fallback
-            X, y, idx, fcols = prepare_training_data(features)
-            if X is not None:
-                model, _ = train_model(X, y, fcols)
-                feature_cols = fcols
+            # Walk-Forward Analysis (when enabled)
+            if WFA_ENABLED:
+                logger.info("  Walk-Forward Analysis mode...")
+                X, y, idx, fcols = prepare_training_data(features)
+                if X is not None:
+                    wfa_preds, wfa_model = run_walk_forward(features, fcols)
+                    if not wfa_preds.empty:
+                        all_predictions.append(wfa_preds)
+                        logger.info("  WFA: %d predictions generated", len(wfa_preds))
+                    if wfa_model is not None:
+                        model = wfa_model
+                        feature_cols = fcols
+            else:
+                # Standard training
+                X, y, idx, fcols = prepare_training_data(features)
+                if X is not None:
+                    model, val_mae = train_model(X, y, fcols)
+                    feature_cols = fcols
+
+        if model is None and not WFA_ENABLED:
+            # Fallback: try loading or train on this market
+            model, feature_cols = load_model()
+            if model is None:
+                X, y, idx, fcols = prepare_training_data(features)
+                if X is not None:
+                    model, _ = train_model(X, y, fcols)
+                    feature_cols = fcols
             if model is None:
                 logger.warning("  No model for %s, skipping prediction", market)
                 continue
 
-        # ── Step 5: Predict latest cross-section ──
+        # ── Step 6: Predict latest cross-section ──
         latest_date = features["date"].max()
         latest = features[features["date"] == latest_date].copy()
         if latest.empty:
@@ -155,9 +180,7 @@ def main():
             continue
 
         if feature_cols is None:
-            exclude = {"date", "symbol", "label", "name", "market",
-                       "high_20", "low_20"}
-            feature_cols = [c for c in latest.columns if c not in exclude]
+            feature_cols = get_feature_cols(latest)
 
         available_cols = [c for c in feature_cols if c in latest.columns]
         if not available_cols:
@@ -165,29 +188,84 @@ def main():
             continue
 
         X_latest = latest[available_cols].fillna(0).values.astype(np.float32)
-        preds = predict(model, X_latest)
-        latest["pred_ret"] = preds
-        logger.info("  Predicted %d stocks", len(preds))
 
-        # ── Step 6: Filter ──
+        try:
+            preds = predict(model, X_latest)
+            latest["pred_ret"] = preds
+            logger.info("  Predicted %d stocks", len(preds))
+
+            # Factor importance from model
+            if hasattr(model, 'feature_importance'):
+                try:
+                    imp = model.feature_importance()
+                    if len(imp) == len(available_cols):
+                        f_imp = sorted(zip(available_cols, imp), key=lambda x: x[1], reverse=True)
+                        logger.info("  Top-10 factors by importance:")
+                        for fname, sc in f_imp[:10]:
+                            logger.info("    %s: %.1f", fname, sc)
+                    else:
+                        logger.warning("  Feature importance shape mismatch: %d vs %d",
+                                       len(imp), len(available_cols))
+                except Exception as e:
+                    logger.debug("  Feature importance unavailable: %s", e)
+        except Exception as exc:
+            logger.warning("  Prediction failed for %s: %s", market, exc)
+            continue
+
+        # ── Step 7: Backtest (predictions) ──
+        if needs_train and not WFA_ENABLED and "label" in latest.columns:
+            # Use full feature df for backtest predictions
+            try:
+                X_all = features[available_cols].fillna(0).values.astype(np.float32)
+                all_preds = predict(model, X_all)
+                bt_df = features[["date", "symbol", "label"]].copy()
+                bt_df["pred_ret"] = all_preds
+                all_predictions.append(bt_df)
+                logger.info("  Backtest predictions: %d rows", len(bt_df))
+            except Exception as exc:
+                logger.debug("  Backtest prediction skip: %s", exc)
+
+        # ── Step 8: Filter ──
         filtered = filter_market(latest, market=market, top_k=TOP_K)
         if filtered.empty:
             logger.warning("  All stocks filtered out for %s", market)
             continue
 
-        # ── Step 7: Diversify ──
+        # ── Step 9: Diversify ──
         diversified = diversify_picks(filtered, top_k=TOP_K)
         picks = diversified.head(TOP_K).copy()
         picks["rank"] = range(1, len(picks) + 1)
         picks["market"] = market
-
-        # ── Step 8: Append ──
         all_picks.append(picks)
 
         metrics = compute_rank_metrics(picks, TOP_K)
         logger.info("  Metrics: %s", metrics)
 
-    # ── Consolidate ──────────────────────────────────────────────────────
+    # ── Run full backtest ─────────────────────────────────────────────────
+    if all_predictions:
+        bt_data = pd.concat(all_predictions, ignore_index=True)
+        logger.info("\n─── Running Backtest ───")
+        logger.info("  Predictions: %d rows, %d-%d",
+                    len(bt_data),
+                    bt_data["date"].min() if "date" in bt_data.columns else None,
+                    bt_data["date"].max() if "date" in bt_data.columns else None)
+        bt_results = run_backtest(bt_data, top_k_list=BACKTEST_TOP_K)
+
+        # Save backtest summary
+        bt_summary = backtest_top_k(bt_data, top_k_list=BACKTEST_TOP_K)
+        if not bt_summary.empty:
+            bt_path = REPORTS / f"backtest_summary_{today_str}.csv"
+            bt_summary.to_csv(bt_path, index=False, encoding="utf-8-sig")
+            logger.info("Backtest summary saved: %s", bt_path)
+
+        # Save cumulative curves
+        curves = bt_results.get("cumulative_curves", {})
+        for k, cum in curves.items():
+            if not cum.empty:
+                cum_path = REPORTS / f"cumulative_top{k}_{today_str}.csv"
+                cum.to_csv(cum_path, index=False, encoding="utf-8-sig")
+
+    # ── Consolidate picks ─────────────────────────────────────────────────
     if not all_picks:
         logger.warning("No predictions for any market!")
         return
@@ -208,6 +286,7 @@ def main():
 
     print(f"\n✅ Multi-market TopK → {output_path}")
     print(final[out_cols].round(4).to_string(index=False))
+    print(f"\n📊 Reports → {REPORTS}")
 
 
 if __name__ == "__main__":
