@@ -1,0 +1,15 @@
+# Multi-Market T+1 Predictor
+akshare>=1.16.0
+baostock
+yfinance>=0.2.50
+pandas>=2.0.0
+numpy>=1.24.0
+lightgbm>=4.0.0
+scikit-learn>=1.3.0
+requests>=2.31.0
+pyarrow>=12.0.0
+pyyaml>=6.0
+# Optional — sentiment enhancement
+# alpha-vantage
+# Optuna tuning (install only when used)
+# optuna
