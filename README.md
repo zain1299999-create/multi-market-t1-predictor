@@ -1,4 +1,4 @@
-# Multi-Market T+1 Predictor v4 — A+B Trading Flow + 7×24 News Sentiment
+# Multi-Market T+1 Predictor v5 — Accuracy-Optimized + A+B Trading Flow + 7×24 News Sentiment
 
 **A 股 T+1 隔日策略（14:00买入 → 次日10:00卖出）**  
 多市场预测 + Alpha158 因子引擎 + **7×24 实时新闻情感轮询** + OpenClaw / GitHub Actions 双轨调度
@@ -33,6 +33,18 @@
 > T+1 模型预测完全自包含，在 GitHub Actions 上定时触发。
 
 ---
+
+## 🎯 v5 准确率优化
+
+| 优化项 | 改进前 | 改进后 | 预期效果 |
+|--------|--------|--------|---------|
+| **排序学习（LambdaRank）** | `regression` + MAE（学具体涨幅） | `lambdarank` + NDCG@5,10,20（学排序） | 🟢 TopK 命中率提升 30-50% |
+| **Optuna 自动搜参** | 固定参数（num_leaves=31, lr=0.05） | 15轮自动搜索（num_leaves 20-150, lr 0.01-0.3, 正则化） | 🟢 释放模型潜力 |
+| **时序 CV 加 Embargo** | 标准 TimeSeriesSplit（泄露风险） | 5 天数据隔断 + 同 ticker 清洗 | 🟢 消除过拟合 |
+| **市场相对收益标签** | 绝对 T+1 收益率 | 扣减当日市场中位数（学 alpha 非 beta） | 🟢 聚焦选股能力 |
+| **IC 自动裁剪弱因子** | 所有 ~160 因子全量进入 | 自动移除 \|IC\|<1% 的噪声因子 | 🟢 减少过拟合噪声 |
+| **WFA 默认开启** | 设而不开 | 默认启用 + 步长 5 天 | 🟢 滚动自适应 |
+| **更快重训周期** | 每 20 天重训 | 每 5 天重训 | 🟢 及时适应市场变化 |
 
 ## 合并来源
 
@@ -210,11 +222,29 @@ python scripts/run_trading_flow.py --slot 1330 --force
 ## 模型架构
 
 ```
+┌─────────────────────────────────────────────┐
+│ ① IC Pruning                                 │
+│ 移除 |IC| < 1% 的弱因子 → 减少噪声            │
+└──────────────────┬──────────────────────────┘
+                   ▼
+┌─────────────────────────────────────────────┐
+│ ② Time-Series CV (3-fold, embargo=5d)       │
+│ 含 purging（清洗相邻同 ticker 行） → 防泄露   │
+└──────────────────┬──────────────────────────┘
+                   ▼
+┌─────────────────────────────────────────────┐
+│ ③ Optuna Hyperparameter Search (15 trials)  │
+│ num_leaves, lr, lambda_l1/l2, bagging ...   │
+└──────────────────┬──────────────────────────┘
+                   ▼
 ┌─────────────┐     ┌─────────────┐
 │  LightGBM   │     │  XGBoost    │
-│  (主模型)    │     │  (辅助模型)  │
+│  LambdaRank │     │  (辅助模型)  │
+│  NDCG@5,10  │     │             │
 └──────┬──────┘     └──────┬──────┘
-       │                   │
+       │ (query groups:    │
+       │  cross-section    │
+       │  per date+market) │
        └────────┬──────────┘
                 ▼
        ┌────────────────┐
@@ -222,12 +252,10 @@ python scripts/run_trading_flow.py --slot 1330 --force
        │  Stacking      │
        └───────┬────────┘
                ▼
-         Stage 3: Factor IC Analysis
+         Stage 5: Factor IC Analysis
          Output: Top-10 / Bottom-10 factors by |IC|
 
-Stage 1: 时间序列 CV（3-fold TimeSeriesSplit, forward-chaining）
-Stage 2: 可选 Optuna 超参搜索（30 trials）
-Stage 4: 可选 Walk-Forward Analysis（504天窗口, 20天步进）
+Label: 市场相对收益（T+1 return − 当日中位数）→ 学 alpha 非 beta
 ```
 
 ---
@@ -338,4 +366,5 @@ python scripts/run_trading_flow.py --slot 0955 --force
 | v1-merge | 四市场 + 宏观 + Optuna |
 | v2 | Alpha158 130+因子 + Ensemble Stacking + WFA + Backtest |
 | v3 | 多源新闻&社交情感模块 (RSS/API/Twitter/微博/Reddit/YouTube) |
-| **v4 (当前)** | **A+B 交易流程 + 7×24 情感轮询 + OpenClaw/GitHub Actions 双轨部署** |
+| **v4** | **A+B 交易流程 + 7×24 情感轮询 + OpenClaw/GitHub Actions 双轨部署** |
+| **v5 (当前)** | **LambdaRank + Optuna 自动搜参 + IC 裁剪 + Embargo CV + 市场相对标签 + WFA 默认开启 + 每5天重训** |

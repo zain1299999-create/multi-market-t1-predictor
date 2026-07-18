@@ -69,4 +69,5 @@ python scripts/run_trading_flow.py --status
 | v1-merge | 四市场 + 宏观 + Optuna |
 | v2 | Alpha158 130+因子 + Ensemble Stacking + WFA + Backtest |
 | v3 | 多源新闻&社交情感模块 |
-| **v4 (当前)** | **A+B 交易流程 + 7×24 情感轮询 + OpenClaw/GitHub Actions 双轨部署** |
+| v4 | A+B 交易流程 + 7×24 情感轮询 + OpenClaw/GitHub Actions 双轨部署 |
+| **v5 (当前)** | **LambdaRank + Optuna 自动搜参 + IC 裁剪 + Embargo CV + 市场相对标签 + WFA 默认开启 + 每5天重训** |
