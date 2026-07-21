@@ -16,6 +16,7 @@ from typing import List, Dict, Optional, Union
 
 import pandas as pd
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_EXCEPTION
 
 from config import (DATA_CACHE, DATA_START_DATE, MACRO_SYMBOLS,
                     ALPHA_VANTAGE_KEY, MARKETAUX_KEY, MARKET_RULES,
@@ -163,7 +164,7 @@ def fetch_cn_index_components(index: str = "hs300") -> pd.DataFrame:
 
 def fetch_cn_batch(codes: List[str], start_date: str = None,
                    end_date: str = None, batch_sleep: float = 0.3) -> pd.DataFrame:
-    """Fetch K-lines for many A-share stocks with parquet cache."""
+    """Fetch K-lines for many A-share stocks with parquet cache + parallel fetch."""
     cache_path = DATA_CACHE / "cn_kline.parquet"
 
     cached = {}
@@ -175,22 +176,50 @@ def fetch_cn_batch(codes: List[str], start_date: str = None,
         except Exception:
             pass
 
+    # Separate cached (fresh) vs need-fetch
     results = []
-    for i, code in enumerate(codes):
+    to_fetch = []
+    for code in codes:
         if code in cached:
             df = cached[code]
             last = df["date"].max()
             if last >= pd.Timestamp.now().normalize() - pd.Timedelta(days=5):
                 results.append(df)
-                if (i + 1) % 50 == 0:
-                    logger.info("  [CN cache hit] %d/%d", i + 1, len(codes))
                 continue
+        to_fetch.append(code)
+
+    if not to_fetch:
+        logger.info("  All %d symbols from cache", len(codes))
+        combined = pd.concat(results, ignore_index=True)
+        try:
+            combined.to_parquet(cache_path, index=False)
+        except Exception:
+            pass
+        return combined
+
+    # Parallel fetch remaining symbols
+    logger.info("  Fetching %d uncached symbols (parallel=%d)", len(to_fetch), min(8, len(to_fetch)))
+
+    def _fetch_one(code):
         df = fetch_akshare_daily(code, start_date, end_date)
-        if not df.empty:
-            results.append(df)
-        if (i + 1) % 10 == 0:
-            logger.info("  [CN fetch] %d/%d", i + 1, len(codes))
-        time.sleep(batch_sleep)
+        return code, df
+
+    fetched = []
+    done_count = 0
+    total = len(to_fetch)
+    max_workers = min(4, total)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        fut_map = {pool.submit(_fetch_one, c): c for c in to_fetch}
+        for fut in as_completed(fut_map):
+            code, df = fut.result(timeout=120)
+            done_count += 1
+            if not df.empty:
+                fetched.append(df)
+            if done_count % 20 == 0 or done_count == total:
+                logger.info("  [CN fetch] %d/%d", done_count, total)
+
+    if fetched:
+        results.extend(fetched)
 
     if not results:
         return pd.DataFrame()
@@ -199,6 +228,7 @@ def fetch_cn_batch(codes: List[str], start_date: str = None,
         combined.to_parquet(cache_path, index=False)
     except Exception:
         pass
+    logger.info("  CN fetch done: %d symbols, %d rows", len(codes), len(combined))
     return combined
 
 
